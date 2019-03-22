@@ -1,12 +1,15 @@
 let z = require('zero-fill')
   , n = require('numbro')
   , momentum = require('../../../lib/momentum')
+  , Phenotypes = require('../../../lib/phenotype')
 
 module.exports = {
   name: 'momentum',
   description: 'MOM = Close(Period) - Close(Length)',
 
   getOptions: function () {
+    this.option('period', 'period length, same as --period_length', String, '1h')
+    this.option('period_length', 'period length, same as --period', String, '1h')
     this.option('momentum_size', 'number of periods to look back for momentum', Number, 5)
   },
 
@@ -46,6 +49,22 @@ module.exports = {
       cols.push(' '.repeat(5))
     }
     return cols
+  },
+
+  phenotypes: {
+    // -- common
+    period_length: Phenotypes.RangePeriod(1, 120, 'm'),
+    min_periods: Phenotypes.Range(1, 2500),
+    markdown_buy_pct: Phenotypes.RangeFloat(-1, 5),
+    markup_sell_pct: Phenotypes.RangeFloat(-1, 5),
+    order_type: Phenotypes.ListOption(['maker', 'taker']),
+    sell_stop_pct: Phenotypes.Range0(1, 50),
+    buy_stop_pct: Phenotypes.Range0(1, 50),
+    profit_stop_enable_pct: Phenotypes.Range0(1, 20),
+    profit_stop_pct: Phenotypes.Range(1,20),
+
+    // -- strategy
+    momentum_size: Phenotypes.Range(1,20)
   }
 }
 

@@ -4,11 +4,11 @@ const ccxt = require('ccxt')
   , colors = require('colors')
   , _ = require('lodash')
 
-module.exports = function bittrex (conf) {
+module.exports = function binance (conf) {
   var public_client, authed_client
 
   function publicClient () {
-    if (!public_client) public_client = new ccxt.binance({ 'apiKey': '', 'secret': '' })
+    if (!public_client) public_client = new ccxt.binance({ 'apiKey': '', 'secret': '', 'options': { 'adjustForTimeDifference': true } })
     return public_client
   }
 
@@ -17,17 +17,17 @@ module.exports = function bittrex (conf) {
       if (!conf.binance || !conf.binance.key || conf.binance.key === 'YOUR-API-KEY') {
         throw new Error('please configure your Binance credentials in ' + path.resolve(__dirname, 'conf.js'))
       }
-      authed_client = new ccxt.binance({ 'apiKey': conf.binance.key, 'secret': conf.binance.secret })
+      authed_client = new ccxt.binance({ 'apiKey': conf.binance.key, 'secret': conf.binance.secret, 'options': { 'adjustForTimeDifference': true }, enableRateLimit: true })
     }
     return authed_client
   }
 
   /**
-   * Convert BNB-BTC to BNB/BTC
-   *
-   * @param product_id BNB-BTC
-   * @returns {string}
-   */
+  * Convert BNB-BTC to BNB/BTC
+  *
+  * @param product_id BNB-BTC
+  * @returns {string}
+  */
   function joinProduct(product_id) {
     let split = product_id.split('-')
     return split[0] + '/' + split[1]
@@ -59,39 +59,47 @@ module.exports = function bittrex (conf) {
 
     getTrades: function (opts, cb) {
       var func_args = [].slice.call(arguments)
-
+      var client = publicClient()
+      var startTime = null
       var args = {}
       if (opts.from) {
-        args.endTime = opts.from
-      }
-      if (opts.to) {
-        args.startTime = opts.to
-      }
-      if (args.startTime && !args.endTime) {
-        // add 12 hours
-        args.endTime = parseInt(args.startTime, 10) + 3600000
-      }
-      else if (args.endTime && !args.startTime) {
-        // subtract 12 hours
-        args.startTime = parseInt(args.endTime, 10) - 3600000
+        startTime = opts.from
+      } else {
+        startTime = parseInt(opts.to, 10) - 3600000
+        args['endTime'] = opts.to
       }
 
-      var client = publicClient()
-      client.fetchTrades(joinProduct(opts.product_id), undefined, undefined, args).then(result => {
-        var trades = result.map(function (trade) {
-          return {
-            trade_id: trade.id,
-            time: trade.timestamp,
-            size: parseFloat(trade.amount),
-            price: parseFloat(trade.price),
-            side: trade.side
+      const symbol = joinProduct(opts.product_id)
+      client.fetchTrades(symbol, startTime, undefined, args).then(result => {
+
+        if (result.length === 0 && opts.from) {
+          // client.fetchTrades() only returns trades in an 1 hour interval.
+          // So we use fetchOHLCV() to detect trade appart from more than 1h.
+          // Note: it's done only in forward mode.
+          const time_diff = client.options['timeDifference']
+          if (startTime + time_diff < (new Date()).getTime() - 3600000) {
+            // startTime is older than 1 hour ago.
+            return client.fetchOHLCV(symbol, undefined, startTime)
+              .then(ohlcv => {
+                return ohlcv.length ? client.fetchTrades(symbol, ohlcv[0][0]) : []
+              })
           }
-        })
+        }
+        return result
+      }).then(result => {
+        var trades = result.map(trade => ({
+          trade_id: trade.id,
+          time: trade.timestamp,
+          size: parseFloat(trade.amount),
+          price: parseFloat(trade.price),
+          side: trade.side
+        }))
         cb(null, trades)
       }).catch(function (error) {
         console.error('An error occurred', error)
         return retry('getTrades', func_args)
       })
+
     },
 
     getBalance: function (opts, cb) {
@@ -150,9 +158,9 @@ module.exports = function bittrex (conf) {
       }, function(err){
         // match error against string:
         // "binance {"code":-2011,"msg":"UNKNOWN_ORDER"}"
-        
+
         if (err) {
-          // decide if this error is allowed for a retry 
+          // decide if this error is allowed for a retry
 
           if (err.message && err.message.match(new RegExp(/-2011|UNKNOWN_ORDER/))) {
             console.error(('\ncancelOrder retry - unknown Order: ' + JSON.stringify(opts) + ' - ' + err).cyan)
@@ -207,7 +215,7 @@ module.exports = function bittrex (conf) {
         cb(null, order)
       }).catch(function (error) {
         console.error('An error occurred', error)
-        
+
         // decide if this error is allowed for a retry:
         // {"code":-1013,"msg":"Filter failure: MIN_NOTIONAL"}
         // {"code":-2010,"msg":"Account has insufficient balance for requested action"}
@@ -263,10 +271,12 @@ module.exports = function bittrex (conf) {
         cb(null, order)
       }).catch(function (error) {
         console.error('An error occurred', error)
-        
+
         // decide if this error is allowed for a retry:
         // {"code":-1013,"msg":"Filter failure: MIN_NOTIONAL"}
-        if (error.message.match(new RegExp(/-1013|MIN_NOTIONAL/))) {
+        // {"code":-2010,"msg":"Account has insufficient balance for requested action"}
+
+        if (error.message.match(new RegExp(/-1013|MIN_NOTIONAL|-2010/))) {
           return cb(null, {
             status: 'rejected',
             reject_reason: 'balance'

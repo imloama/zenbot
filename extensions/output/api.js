@@ -21,18 +21,27 @@ module.exports = function api () {
     return otherKeys
   }
 
+  // set up rate limiter: maximum of fifty requests per minute
+  let RateLimit = require('express-rate-limit');
+  let limiter = new RateLimit({
+    windowMs: 1*60*1000, // 1 minute
+    max: 50
+  });
+
   let startServer = function(port, ip, tradeObject) {
     tradeObject.port = port
 
     app.set('views', path.join(__dirname+'/../../templates'))
     app.set('view engine', 'ejs')
 
+    app.use(limiter);
     app.use('/assets', express.static(__dirname+'/../../templates/dashboard_assets'))
     app.use('/assets-wp', express.static(__dirname+'/../../dist/'))
     app.use('/assets-zenbot', express.static(__dirname+'/../../assets'))
 
     app.get('/', function (req, res) {
       app.locals.moment = moment
+      app.locals.deposit = tradeObject.options.deposit
       let datas = JSON.parse(JSON.stringify(objectWithoutKey(tradeObject, 'options'))) // deep copy to prevent alteration
       res.render('dashboard', datas)
     })
@@ -45,7 +54,7 @@ module.exports = function api () {
       res.sendFile(path.join(__dirname+'../../../stats/index.html'))
     })
 
-    if (ip) {
+    if (ip && ip !== '0.0.0.0') {
       app.listen(port, ip)
       tradeObject.url = ip + ':' + port + '/'
     } else {
